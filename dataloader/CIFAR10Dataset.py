@@ -39,9 +39,12 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             self.transform = transforms.Compose([
                 transforms.RandomCrop(32, padding=4),
                 transforms.RandomHorizontalFlip(),
+                transforms.Normalize(mean=config['mean'], std=config['std']),
             ])
         elif transform == 'val':
-            self.transform = None
+            self.transform = transforms.Compose([
+                transforms.Normalize(mean=config['mean'], std=config['std']),
+            ])
         else:
             raise NotImplementedError
 
