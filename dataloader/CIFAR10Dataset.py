@@ -1,10 +1,11 @@
 import os
 
 import torch.utils.data
+from torchvision import transforms
 import numpy as np
 
 class CIFAR10Dataset(torch.utils.data.Dataset):
-    def __init__(self, config):
+    def __init__(self, config, transform='src'):
         super(CIFAR10Dataset, self).__init__()
 
         self.file_path = config['file_path']
@@ -14,13 +15,12 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
         self.features = []
         self.class_labels = []
         self.domain_labels = []
-        self.transform = None
 
         for i, domain in enumerate(self.domains):
             data_path, label_path = self.get_filepaths(domain)
             data = np.load(data_path)
             data = data.astype('float32')  / 255.0
-            
+
             self.features.append(torch.from_numpy(data))
             self.class_labels.append(torch.from_numpy(np.load(label_path)).long())
             self.domain_labels.append(torch.Tensor(i for _ in range(len(data))).long())
@@ -34,6 +34,16 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             self.class_labels,
             self.domain_labels,
         )
+
+        if transform == 'src':
+            self.transform = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+            ])
+        elif transform == 'val':
+            self.transform = None
+        else:
+            raise NotImplementedError
 
     def __len__(self):
         return len(self.dataset)
