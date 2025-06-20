@@ -17,7 +17,7 @@ def convert_iabn(module, alpha=4, **kwargs):
             affine=module.affine,
         )
 
-        module_output._bn = copy.deepcopy(module)
+        module_output.bn = copy.deepcopy(module)
 
     for name, child in module.named_children():
         module_output.add_module(
@@ -70,8 +70,8 @@ class IABN2d(nn.Module):
 
         x_n = (x - mu_adj) * torch.rsqrt(sigma2_adj + self.eps)
         if self.affine:
-            weight = self._bn.weight.view(C, 1, 1)
-            bias = self._bn.bias.view(C, 1, 1)
+            weight = self.bn.weight.view(C, 1, 1)
+            bias = self.bn.bias.view(C, 1, 1)
             x_n = x_n * weight + bias
         return x_n
 
@@ -118,7 +118,7 @@ class IABN1d(nn.Module):
 
         x_n = (x - mu_adj) * torch.rsqrt(sigma2_adj + self.eps)
         if self.affine:
-            weight = self._bn.weight.view(C, 1, 1)
-            bias = self._bn.bias.view(C, 1, 1)
+            weight = self.bn.weight.view(C, 1, 1)
+            bias = self.bn.bias.view(C, 1, 1)
             x_n = x_n * weight + bias
         return x_n
