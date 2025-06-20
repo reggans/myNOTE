@@ -5,7 +5,7 @@ import numpy as np
 
 import copy
 
-def convert_iabn(module, alpha=4, **kwargs):
+def convert_iabn(module, alpha=4):
     module_output = module
     if isinstance(module, nn.BatchNorm2d) or isinstance(module, nn.BatchNorm1d):
         IABN = IABN2d if isinstance(module, nn.BatchNorm2d) else IABN1d
@@ -21,7 +21,7 @@ def convert_iabn(module, alpha=4, **kwargs):
 
     for name, child in module.named_children():
         module_output.add_module(
-            name, convert_iabn(child, alpha=alpha, **kwargs)
+            name, convert_iabn(child, alpha=alpha)
         )
     del module
     return module_output

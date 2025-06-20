@@ -5,12 +5,15 @@ from torchvision import transforms
 import numpy as np
 
 class CIFAR10Dataset(torch.utils.data.Dataset):
-    def __init__(self, config, transform='src'):
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2471, 0.2435, 0.2616]
+    num_classes = 10
+
+    def __init__(self, file_path, domains, transform='src'):
         super(CIFAR10Dataset, self).__init__()
 
-        self.file_path = config['file_path']
-        self.domains = config['domains']
-        self.img_size = config['img_size']
+        self.file_path = file_path
+        self.domains = domains
 
         self.features = []
         self.class_labels = []
@@ -39,11 +42,11 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             self.transform = transforms.Compose([
                 transforms.RandomCrop(32, padding=4),
                 transforms.RandomHorizontalFlip(),
-                transforms.Normalize(mean=config['mean'], std=config['std']),
+                transforms.Normalize(mean=self.mean, std=self.std),
             ])
         elif transform == 'val':
             self.transform = transforms.Compose([
-                transforms.Normalize(mean=config['mean'], std=config['std']),
+                transforms.Normalize(mean=self.mean, std=self.std),
             ])
         else:
             raise NotImplementedError

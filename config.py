@@ -16,7 +16,4 @@ CIFAR10_CONFIG = {
     'classes': ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'],
     'num_class': 10,
     'severity': 5,
-
-    'mean': [0.4914, 0.4822, 0.4465],
-    'std': [0.2471, 0.2435, 0.2616]
 }
