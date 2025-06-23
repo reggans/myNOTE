@@ -73,3 +73,25 @@ class PBRS():
             else:
                 return False
         return True
+
+class FIFO():
+    def __init__(self, capacity):
+        self.data = [[],[],[]]
+        self.capacity = capacity
+
+    def get_memory(self):
+        return self.data
+
+    def get_occupancy(self):
+        return len(self.data[0])
+
+    def add_instance(self, instance):
+        if self.get_occupancy() >= self.capacity:
+            self.remove_instance()
+
+        for i in range(len(instance)):
+            self.data[i].append(instance[i])
+
+    def remove_instance(self):
+        for i in range(len(self.data)):
+            self.data[i].pop(0)
