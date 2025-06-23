@@ -1,8 +1,12 @@
+from asyncio import current_task
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 from tqdm.auto import tqdm
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import f1_score
 
 from ResNet import ResNet18
 from iabn import convert_iabn
@@ -145,7 +149,7 @@ class NOTE:
                 return SKIPPED
 
         if not self.online_config["use_learned_stats"]:
-            self.evaluation_online(current_sample) # TODO
+            self.evaluation_online(sample_num, self.fifo.get_memory())
 
         if not adapt:
             return TRAINED
@@ -181,9 +185,55 @@ class NOTE:
 
         return TRAINED
 
-    def evaluation_online(self, current_sample):
-        
+    def evaluation_online(self, epoch, current_sample):
+        self.net.eval()
+
+        with torch.no_grad():
+            feats, cls, do = current_sample
+
+            feats, cls, do = torch.stack(feats), torch.tensor(cls), torch.tensor(do)
+            feats, cls, do = feats.to(self.device), cls.to(self.device), do.to(self.device)
+
+            y_pred = self.net(feats).max(1, keepdim=False)[1]
+
+            try:
+                true_cls_list = self.json['gt']
+                pred_cls_list = self.json['pred']
+                accuracy_list = self.json['accuracy']
+                f1_macro_list = self.json['f1_macro']
+                distance_l2_list = self.json['distance_l2']
+            except KeyError:
+                true_cls_list = []
+                pred_cls_list = []
+                accuracy_list = []
+                f1_macro_list = []
+                distance_l2_list = []
+
+            # append values to lists
+            true_cls_list += [int(c) for c in cls]
+            pred_cls_list += [int(c) for c in y_pred.tolist()]
+            cumul_accuracy = sum(1 for gt, pred in zip(true_cls_list, pred_cls_list) if gt == pred) / float(
+                len(true_cls_list)) * 100
+            accuracy_list.append(cumul_accuracy)
+            f1_macro_list.append(f1_score(true_cls_list, pred_cls_list,
+                                          average='macro'))
+
+            self.occurred_class = [0 for i in range(self.num_classes)]
+
+            progress_checkpoint = [int(i * (len(self.target_dataset) / 100.0)) for i in range(1, 101)]
+            for i in range(epoch + 1 - len(current_sample[0]), epoch + 1):  # consider a batch input
+                if i in progress_checkpoint:
+                    print(
+                        f'[Online Eval][NumSample:{i}][Epoch:{progress_checkpoint.index(i) + 1}][Accuracy:{cumul_accuracy}]')
+
+            # update self.json file
+            self.json = {
+                'gt': true_cls_list,
+                'pred': pred_cls_list,
+                'accuracy': accuracy_list,
+                'f1_macro': f1_macro_list,
+                'distance_l2': distance_l2_list,
+            }
 
 if __name__ == "__main__":
     model = NOTE()
-    test
