@@ -7,3 +7,8 @@ if __name__ == "__main__":
         "epochs": 100,
         "batch_size": 64,
     }
+    online_config = {
+        "use_learned_stats": True,
+        "update_interval": 64,
+        "temp_factor": 1.0,
+    }

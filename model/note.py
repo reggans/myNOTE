@@ -6,21 +6,29 @@ from tqdm.auto import tqdm
 
 from ResNet import ResNet18
 from iabn import convert_iabn
+from utils import memory
+from utils.loss_functions import HLoss
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class NOTE:
-    def __init__(self, source_dataloader, target_dataloader, train_config, save_path,
-                 iabn=True, alpha=4, bn_momentum=0.1,):
-        assert (source_dataloader.dataset.num_classes == target_dataloader.dataset.num_classes)
+    def __init__(self, source_dataloader, target_dataset, train_config, online_config, save_path,
+                 iabn=True, alpha=4, bn_momentum=0.1,
+                 memory_type="PBRS", capacity=64,):
+        assert (source_dataloader.dataset.num_classes == target_dataset.num_classes)
 
+        # Data-related
         self.device = DEVICE
         self.source_dataloader = source_dataloader
-        self.target_dataloader = target_dataloader
-        self.train_config = train_config
+        self.target_dataset = target_dataset
         self.num_classes = source_dataloader.dataset.num_classes
 
+        # Train-related
+        self.train_config = train_config
+        self.online_config = online_config
         self.save_path = save_path
+
+        # IABN-related
         self.iabn = iabn
         self.alpha = alpha
         self.bn_momentum = bn_momentum
@@ -63,7 +71,14 @@ class NOTE:
             self.scheduler = None
         self.class_criterion = torch.nn.CrossEntropyLoss()
 
-        # TODO memory
+        # Manage memory
+        self.fifo = memory.FIFO(capacity=capacity)
+        if memory_type == "PBRS":
+            self.mem = memory.PBRS(capacity=capacity, num_class=self.num_classes)
+        elif memory_type == "FIFO":
+            self.mem = memory.FIFO(capacity=capacity)
+        else:
+            raise NotImplementedError
 
         self.json = {}
         self.l2_distance = []
@@ -94,5 +109,81 @@ class NOTE:
         avg_loss = class_loss_sum / total_n
         return avg_loss
 
+    def train_online(self, sample_num, adapt=True):
+        TRAINED = 0
+        SKIPPED = 1
+        FINISHED = 2
+
+        if not hasattr(self, "previous_train_loss"):
+            self.previous_train_loss = 0
+
+        N = len(self.target_dataset)
+        if sample_num > N:
+            return FINISHED
+
+        current_sample =  self.target_dataset[sample_num - 1]
+        self.fifo.add_instance(current_sample)
+
+        with torch.no_grad():
+            self.net.eval()
+
+            if isinstance(self.mem, memory.FIFO):
+                self.mem.add_instance(current_sample)
+            else:
+                f, c, d = current_sample
+                f = f.to(self.device)
+                c = c.to(self.device)
+                d = d.to(self.device)
+
+                logit = self.net(f.unsqueeze(0))
+                pseudo_cls = torch.argmax(logit, keepdim=False)[1][0]
+                self.mem.add_instance((f, pseudo_cls, d))
+
+        if (sample_num % self.online_config["update_interval"] != 0
+             and not (sample_num == len(self.target_dataset)
+                      and self.online_config["update_interval"] >= sample_num)):
+                return SKIPPED
+
+        if not self.online_config["use_learned_stats"]:
+            self.evaluation_online(current_sample) # TODO
+
+        if not adapt:
+            return TRAINED
+
+        self.net.train()
+
+        if len(self.target_dataset) == 1:
+            self.net.eval()
+
+        feats, _, _ = self.mem.get_memory()
+        feats = torch.stack(feats)
+        dataset = torch.utils.data.TensorDataset(feats)
+        data_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.train_config["batch_size"],
+            shuffle=True,
+            drop_last=False,
+            pin_memory=False,
+        )
+        entropy_loss = HLoss(temp_factor=self.online_config["temp_factor"])
+
+        for epoch in range(self.train_config["epochs"]):
+            for feats in enumerate(data_loader):
+                feats = feats.to(self.device)
+                preds = self.net(feats)
+
+                if self.online_config["optimize"]:
+                    loss = entropy_loss(preds)
+
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+
+        return TRAINED
+
+    def evaluation_online(self, current_sample):
+        
+
 if __name__ == "__main__":
-    pass
+    model = NOTE()
+    test
