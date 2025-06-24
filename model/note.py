@@ -1,5 +1,3 @@
-from asyncio import current_task
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,24 +6,25 @@ from tqdm.auto import tqdm
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 
-from ResNet import ResNet18
-from iabn import convert_iabn
+from .iabn import convert_iabn
 from utils import memory
 from utils.loss_functions import HLoss
+from utils.logging import to_json
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 
 class NOTE:
-    def __init__(self, source_dataloader, target_dataset, train_config, online_config, save_path,
+    def __init__(self, source_dataset, target_dataset, train_config, online_config, save_path,
                  iabn=True, alpha=4, bn_momentum=0.1,
                  memory_type="PBRS", capacity=64,):
-        assert (source_dataloader.dataset.num_classes == target_dataset.num_classes)
+        assert (source_dataset.num_classes == target_dataset.num_classes)
 
         # Data-related
         self.device = DEVICE
-        self.source_dataloader = source_dataloader
+        self.source_dataloader = torch.utils.data.DataLoader(source_dataset, batch_size=train_config["batch_size"],)
         self.target_dataset = target_dataset
-        self.num_classes = source_dataloader.dataset.num_classes
+        self.num_classes = source_dataset.num_classes
 
         # Train-related
         self.train_config = train_config
@@ -38,11 +37,11 @@ class NOTE:
         self.bn_momentum = bn_momentum
 
         # Init net
-        self.net = torchvision.models.resnet18(pretrained=True).to(self.device)
+        self.net = torchvision.models.resnet18(weights="IMAGENET1K_V1").to(self.device)
         if self.iabn:
             convert_iabn(self.net, self.alpha)
         num_feats = self.net.fc.in_features
-        self.net.fc = nn.Linear(num_feats, self.num_classes)
+        self.net.fc = nn.Linear(num_feats, self.num_classes).to(self.device)
 
         # Manage net params
         for param in self.net.parameters():
@@ -113,6 +112,28 @@ class NOTE:
         avg_loss = class_loss_sum / total_n
         return avg_loss
 
+    def evaluation(self):
+        self.net.eval()
+        class_loss_sum = 0
+        class_acc_sum = 0
+        total_n = 0
+        data_loader = torch.utils.data.DataLoader(self.target_dataset, batch_size=self.train_config["batch_size"])
+
+        for data in data_loader:
+            feats, cls, _ = data
+            feats = feats.to(self.device)
+            cls = cls.to(self.device)
+
+            with torch.no_grad():
+                preds = self.net(feats)
+                class_loss = self.class_criterion(preds, cls)
+
+            class_loss_sum += float(class_loss.item() * feats.shape[0])
+            class_acc_sum += (preds.max(1, keepdim=False)[1] == cls).sum()
+            total_n += feats.shape[0]
+
+        return class_loss_sum / total_n, class_acc_sum / total_n
+
     def train_online(self, sample_num, adapt=True):
         TRAINED = 0
         SKIPPED = 1
@@ -140,15 +161,18 @@ class NOTE:
                 d = d.to(self.device)
 
                 logit = self.net(f.unsqueeze(0))
-                pseudo_cls = torch.argmax(logit, keepdim=False)[1][0]
+                pseudo_cls = logit.max(1, keepdim=False)[1][0]
                 self.mem.add_instance((f, pseudo_cls, d))
 
-        if (sample_num % self.online_config["update_interval"] != 0
-             and not (sample_num == len(self.target_dataset)
-                      and self.online_config["update_interval"] >= sample_num)):
+        if not self.online_config["use_learned_stats"]:
+            self.evaluation_online(sample_num, [[current_sample[0]], [current_sample[1]], [current_sample[2]]])
+
+        if ((sample_num + 1) % self.online_config["update_interval"] != 0
+                and not (sample_num == len(self.target_dataset))
+                and self.online_config["update_interval"] >= sample_num):
                 return SKIPPED
 
-        if not self.online_config["use_learned_stats"]:
+        if self.online_config["use_learned_stats"]:
             self.evaluation_online(sample_num, self.fifo.get_memory())
 
         if not adapt:
@@ -172,8 +196,8 @@ class NOTE:
         entropy_loss = HLoss(temp_factor=self.online_config["temp_factor"])
 
         for epoch in range(self.train_config["epochs"]):
-            for feats in enumerate(data_loader):
-                feats = feats.to(self.device)
+            for feats in data_loader:
+                feats = feats[0].to(self.device)
                 preds = self.net(feats)
 
                 if self.online_config["optimize"]:
@@ -191,7 +215,7 @@ class NOTE:
         with torch.no_grad():
             feats, cls, do = current_sample
 
-            feats, cls, do = torch.stack(feats), torch.tensor(cls), torch.tensor(do)
+            feats, cls, do = torch.stack(feats), torch.stack(cls), torch.stack(do)
             feats, cls, do = feats.to(self.device), cls.to(self.device), do.to(self.device)
 
             y_pred = self.net(feats).max(1, keepdim=False)[1]
@@ -234,6 +258,23 @@ class NOTE:
                 'f1_macro': f1_macro_list,
                 'distance_l2': distance_l2_list,
             }
+
+    def dump_eval_online_result(self, is_train_offline=False):
+        if is_train_offline:
+            data_loader = torch.utils.data.DataLoader(self.target_dataset,
+                                                      batch_size=self.train_config["batch_size"],
+                                                      shuffle=False)
+
+            for i, data in enumerate(data_loader):
+                feats, cls, do = data
+                input_data = [list(feats), list(cls), list(do)]
+                self.evaluation_online(i * self.train_config["batch_size"], input_data)
+
+        # logging json files
+        json_file = open(self.save_path + 'online_eval.json', 'w')
+        json_subsample = {key: self.json[key] for key in self.json.keys() - {'extracted_feat'}}
+        json_file.write(to_json(json_subsample))
+        json_file.close()
 
 if __name__ == "__main__":
     model = NOTE()

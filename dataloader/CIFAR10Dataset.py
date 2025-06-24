@@ -6,8 +6,8 @@ from torchvision import transforms
 import numpy as np
 
 class CIFAR10Dataset(torch.utils.data.Dataset):
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2471, 0.2435, 0.2616]
+    mean = [0.4914, 0.4822, 0.4465]
+    std = [0.2471, 0.2435, 0.2616]
     num_classes = 10
 
     def __init__(self, file_path, domains, transform='src', distribution='real', dir_beta=0.1):
@@ -28,10 +28,11 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             data_path, label_path = self.get_filepaths(domain)
             data = np.load(data_path)
             data = data.astype('float32')  / 255.0
+            data = data.transpose((0, 3, 1, 2)) # To (B, C, H, W)
 
             self.features.append(torch.from_numpy(data))
             self.class_labels.append(torch.from_numpy(np.load(label_path)).long())
-            self.domain_labels.append(torch.Tensor(i for _ in range(len(data))).long())
+            self.domain_labels.append(torch.Tensor([i for _ in range(len(data))]).long())
 
         self.features = torch.cat(self.features)
         self.class_labels = torch.cat(self.class_labels)
@@ -51,7 +52,7 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
                 transforms.RandomHorizontalFlip(),
                 transforms.Normalize(mean=self.mean, std=self.std),
             ])
-        elif transform == 'val':
+        elif transform == 'tgt':
             self.transform = transforms.Compose([
                 transforms.Normalize(mean=self.mean, std=self.std),
             ])

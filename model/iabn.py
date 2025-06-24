@@ -47,9 +47,6 @@ class IABN2d(nn.Module):
         B, C, H, W = x.shape
         L = H * W
 
-        mu = torch.mean(x, dim=(2, 3), keepdim=True)  # (B, C, 1, 1)
-        sigma2 = torch.var(x, dim=(2, 3), keepdim=True)  # (B, C, 1, 1)
-
         if self.training:
             self.bn(x)  # Update running stats
 
@@ -60,13 +57,20 @@ class IABN2d(nn.Module):
             else:
                 sigma2_b, mu_b = torch.var_mean(x, dim=(0, 2, 3), keepdim=True, unbiased=True)
 
-        # Originally there's a threshold conditional, skipped here
-        s_mu = torch.sqrt((sigma2_b + self.eps) / L)
-        s_sigma2 = (sigma2_b + self.eps) * np.sqrt(2 / (L-1))
+        # Skip to avoid division by zero
+        if L <= 1:
+            mu_adj = mu_b
+            sigma2_adj = sigma2_b
+        else:
+            mu = torch.mean(x, dim=(2, 3), keepdim=True)  # (B, C, 1, 1)
+            sigma2 = torch.var(x, dim=(2, 3), keepdim=True)  # (B, C, 1, 1)
 
-        mu_adj = mu_b + self._softshrink(mu - mu_b, self.alpha * s_mu)
-        sigma2_adj = sigma2_b + self._softshrink(sigma2 - sigma2_b, self.alpha * s_sigma2)
-        sigma2_adj = F.relu(sigma2_adj)
+            s_mu = torch.sqrt((sigma2_b + self.eps) / L)
+            s_sigma2 = (sigma2_b + self.eps) * np.sqrt(2 / (L-1))
+
+            mu_adj = mu_b + self._soft_shrinkage(mu - mu_b, self.alpha * s_mu)
+            sigma2_adj = sigma2_b + self._soft_shrinkage(sigma2 - sigma2_b, self.alpha * s_sigma2)
+            sigma2_adj = F.relu(sigma2_adj)
 
         x_n = (x - mu_adj) * torch.rsqrt(sigma2_adj + self.eps)
         if self.affine:
@@ -112,8 +116,8 @@ class IABN1d(nn.Module):
         s_mu = torch.sqrt((sigma2_b + self.eps) / L)
         s_sigma2 = (sigma2_b + self.eps) * np.sqrt(2 / (L - 1))
 
-        mu_adj = mu_b + self._softshrink(mu - mu_b, self.alpha * s_mu)
-        sigma2_adj = sigma2_b + self._softshrink(sigma2 - sigma2_b, self.alpha * s_sigma2)
+        mu_adj = mu_b + self._soft_shrinkage(mu - mu_b, self.alpha * s_mu)
+        sigma2_adj = sigma2_b + self._soft_shrinkage(sigma2 - sigma2_b, self.alpha * s_sigma2)
         sigma2_adj = F.relu(sigma2_adj)
 
         x_n = (x - mu_adj) * torch.rsqrt(sigma2_adj + self.eps)
