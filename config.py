@@ -1,22 +1,25 @@
 NOTE_CONFIG = {
     'train_config': {
         "method": "NOTE",
-        "lr": 1e-3,
-        "momentum": 0.1,
-        "weight_decay": 5e-4,
-        "epochs": 1,
-        "batch_size": 64,
+        # Dataset-specific
+        "lr": None,
+        "momentum": None,
+        "weight_decay": None,
+        "batch_size": None,
+        "epochs": None,
     },
     'online_config':{
+        "epochs": 1,
         "use_learned_stats": True,
         "update_interval": 64,
         "temp_factor": 1.0,
         "optimize": True,
     },
-    'save_path': 'logs/NOTE',
+    'save_path': 'logs/NOTE/',
+    'checkpoint_path': 'ckpt/NOTE/',
     'iabn': True,
     'alpha': 4,
-    'bn_momentum': 0.1,
+    'bn_momentum': 0.01,
     'memory_type': "PBRS",
     'capacity': 64,
 
@@ -27,6 +30,8 @@ CIFAR10_CONFIG = {
     'learning_rate': 0.1, #initial learning rate
     'weight_decay': 0.0005,
     'momentum': 0.9,
+    'batch_size': 128,
+    'epochs': 200,
     'img_size': 3072,
 
     'file_path': './dataset/CIFAR-10-C',
@@ -34,6 +39,6 @@ CIFAR10_CONFIG = {
     'num_class': 10,
     'severity': 5,
     'domains': ['test'],
-    'distribution': 'random',
+    'distribution': 'dirichlet',
     'dir_beta': 0.1,
 }

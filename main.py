@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import numpy as np
 import torch
@@ -12,24 +13,30 @@ corruptions = ["shot_noise-5", "motion_blur-5", "snow-5", "pixelate-5", "gaussia
                     "jpeg_compression-5", "elastic_transform-5"]
 
 if __name__ == "__main__":
+    NOTE_CONFIG["train_config"]["lr"] = CIFAR10_CONFIG["learning_rate"]
+    NOTE_CONFIG["train_config"]["batch_size"] = CIFAR10_CONFIG["batch_size"]
+    NOTE_CONFIG["train_config"]["momentum"] = CIFAR10_CONFIG["momentum"]
+    NOTE_CONFIG["train_config"]["weight_decay"] = CIFAR10_CONFIG["weight_decay"]
+    NOTE_CONFIG["train_config"]["epochs"] = CIFAR10_CONFIG["epochs"]
+
     source_dataset = CIFAR10Dataset(
         file_path=CIFAR10_CONFIG["file_path"],
         domains=["original"],
         transform='src',
     )
-    print(len(source_dataset))
 
     target_dataset = CIFAR10Dataset(
         file_path=CIFAR10_CONFIG["file_path"],
-        domains=["test"],
+        domains=["shot_noise-5"],
         transform='tgt',
         distribution=CIFAR10_CONFIG["distribution"],
         dir_beta=CIFAR10_CONFIG["dir_beta"],
     )
-    print(len(target_dataset))
-    exit()
 
     model = NOTE(source_dataset, target_dataset, **NOTE_CONFIG)
+    if os.path.isfile(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"):
+        model.net.load_state_dict(torch.load(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"))
+        print("Load pretrained checkpoint from {}".format(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"))
 
     best_acc, best_epoch = 0, 0
     for epoch in range(NOTE_CONFIG["train_config"]["epochs"]):
@@ -40,7 +47,9 @@ if __name__ == "__main__":
             best_acc = avg_acc
             best_epoch = epoch
 
+    torch.save(model.net.state_dict(), NOTE_CONFIG["checkpoint_path"] + "pretrained.pth")
     print(f'best_acc: {best_acc}, best_epoch: {best_epoch}')
+
 
     for epoch in range(len(target_dataset)):
         model.train_online(epoch, adapt=True)

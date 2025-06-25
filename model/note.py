@@ -15,7 +15,8 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 class NOTE:
-    def __init__(self, source_dataset, target_dataset, train_config, online_config, save_path,
+    def __init__(self, source_dataset, target_dataset, train_config, online_config,
+                 save_path, checkpoint_path,
                  iabn=True, alpha=4, bn_momentum=0.1,
                  memory_type="PBRS", capacity=64,):
         assert (source_dataset.num_classes == target_dataset.num_classes)
@@ -30,6 +31,7 @@ class NOTE:
         self.train_config = train_config
         self.online_config = online_config
         self.save_path = save_path
+        self.checkpoint_path = checkpoint_path
 
         # IABN-related
         self.iabn = iabn
@@ -195,7 +197,7 @@ class NOTE:
         )
         entropy_loss = HLoss(temp_factor=self.online_config["temp_factor"])
 
-        for epoch in range(self.train_config["epochs"]):
+        for epoch in range(self.online_config["epochs"]):
             for feats in data_loader:
                 feats = feats[0].to(self.device)
                 preds = self.net(feats)

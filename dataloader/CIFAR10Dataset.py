@@ -107,8 +107,8 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             N = len(self.features)
             min_size_thresh = 10
             features = []
-            cl_labels = []
-            do_labels = []
+            cl = []
+            do = []
             while min_size < min_size_thresh:
                 idx_batch = [[] for _ in range(numchunks)]
                 idx_batch_cls = [[] for _ in range(numchunks)]
@@ -131,9 +131,9 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
                 for cls in cls_seq:
                     idx = chunk[cls]
                     features.extend(self.features[idx])
-                    cl_labels.extend(self.domain_labels[idx])
-                    do_labels.extend(self.domain_labels[idx])
+                    cl.extend(self.domain_labels[idx])
+                    do.extend(self.domain_labels[idx])
 
             self.features = torch.stack(features)
-            self.domain_labels = torch.LongTensor(do_labels)
-            self.class_labels = torch.LongTensor(cl_labels)
+            self.domain_labels = torch.LongTensor(do)
+            self.class_labels = torch.LongTensor(cl)
