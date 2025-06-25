@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,7 +13,7 @@ from utils import memory
 from utils.loss_functions import HLoss
 from utils.logging import to_json
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:6" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 class NOTE:
@@ -277,6 +279,20 @@ class NOTE:
         json_subsample = {key: self.json[key] for key in self.json.keys() - {'extracted_feat'}}
         json_file.write(to_json(json_subsample))
         json_file.close()
+
+    def save_checkpoint(self, epoch):
+        ckpt = {'model': self.net.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'epoch': epoch,}
+        torch.save(ckpt, self.save_path + "pretrained_checkpoint.pth")
+
+    def load_checkpoint(self):
+        if os.path.isfile(self.save_path + "pretrained_checkpoint.pth"):
+            ckpt = torch.load(self.save_path + "pretrained_checkpoint.pth")
+            self.net.load_state_dict(ckpt['model'])
+            self.optimizer.load_state_dict(ckpt['optimizer'])
+            return ckpt['epoch']
+        return 0
 
 if __name__ == "__main__":
     model = NOTE()

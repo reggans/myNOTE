@@ -34,12 +34,10 @@ if __name__ == "__main__":
     )
 
     model = NOTE(source_dataset, target_dataset, **NOTE_CONFIG)
-    if os.path.isfile(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"):
-        model.net.load_state_dict(torch.load(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"))
-        print("Load pretrained checkpoint from {}".format(NOTE_CONFIG["checkpoint_path"] + "pretrained.pth"))
+    start_epoch = model.load_checkpoint()
 
     best_acc, best_epoch = 0, 0
-    for epoch in range(NOTE_CONFIG["train_config"]["epochs"]):
+    for epoch in range(start_epoch, NOTE_CONFIG["train_config"]["epochs"]):
         model.train()
         avg_loss, avg_acc = model.evaluation()
 
@@ -47,9 +45,9 @@ if __name__ == "__main__":
             best_acc = avg_acc
             best_epoch = epoch
 
-    torch.save(model.net.state_dict(), NOTE_CONFIG["checkpoint_path"] + "pretrained.pth")
-    print(f'best_acc: {best_acc}, best_epoch: {best_epoch}')
+        model.save_checkpoint(epoch)
 
+    print(f'best_acc: {best_acc}, best_epoch: {best_epoch}')
 
     for epoch in range(len(target_dataset)):
         model.train_online(epoch, adapt=True)
