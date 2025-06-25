@@ -10,15 +10,17 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
     std = [0.2471, 0.2435, 0.2616]
     num_classes = 10
 
-    def __init__(self, file_path, domains, transform='src', distribution='real', dir_beta=0.1):
+    def __init__(self, file_path, domains, transform='src', distribution='real', dir_beta=0.1, shuffle_criterion='class'):
         super(CIFAR10Dataset, self).__init__()
         if distribution not in ['real', 'random', 'dirichlet']:
             raise NotImplementedError
 
         self.file_path = file_path
         self.domains = domains
+        self.num_domains = len(domains)
         self.distribution = distribution
         self.dir_beta = dir_beta
+        self.shuffle_criterion = shuffle_criterion
 
         self.features = []
         self.class_labels = []
@@ -102,7 +104,7 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
         self.domain_labels = self.domain_labels[permutation]
 
         if self.distribution == 'dirichlet':
-            numchunks = self.num_classes
+            numchunks = self.num_classes if self.shuffle_criterion == 'class' else self.num_domains
             min_size = -1
             N = len(self.features)
             min_size_thresh = 10
@@ -113,8 +115,11 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
                 idx_batch = [[] for _ in range(numchunks)]
                 idx_batch_cls = [[] for _ in range(numchunks)]
                 for k in range(numchunks):
-                    cl_labels = self.class_labels.numpy()
-                    idx_k = np.where(cl_labels == k)[0]
+                    if self.shuffle_criterion == 'class':
+                        criterion = self.class_labels.numpy()
+                    else:
+                        criterion = self.domain_labels.numpy()
+                    idx_k = np.where(criterion == k)[0]
 
                     proportions = rng.dirichlet(np.repeat(self.dir_beta, numchunks))
                     proportions /= proportions.sum()
