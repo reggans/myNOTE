@@ -8,25 +8,28 @@ from tqdm.auto import tqdm
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 
-from .iabn import convert_iabn
+from .iabn import convert_iabn, IABN1d, IABN2d
 from utils import memory
 from utils.loss_functions import HLoss
 from utils.logging import to_json
+from .ResNet import ResNet18
 
-DEVICE = torch.device("cuda:6" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:5" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 class NOTE:
-    def __init__(self, source_dataset, target_dataset, train_config, online_config,
+    def __init__(self, source_dataset, val_dataset, target_dataset,
+                 train_config, online_config,
                  save_path, checkpoint_path,
-                 iabn=True, alpha=4, bn_momentum=0.1,
+                 iabn=True, alpha=4,
                  memory_type="PBRS", capacity=64,):
         assert (source_dataset.num_classes == target_dataset.num_classes)
 
         # Data-related
         self.device = DEVICE
         self.source_dataloader = torch.utils.data.DataLoader(source_dataset, batch_size=train_config["batch_size"],)
-        self.target_dataset = target_dataset
+        self.val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=train_config["batch_size"],)
+        self.target_dataset = target_dataset        # Kept as dataset for ease later
         self.num_classes = source_dataset.num_classes
 
         # Train-related
@@ -38,10 +41,10 @@ class NOTE:
         # IABN-related
         self.iabn = iabn
         self.alpha = alpha
-        self.bn_momentum = bn_momentum
+        self.bn_momentum = train_config["bn_momentum"]
 
         # Init net
-        self.net = torchvision.models.resnet18(weights="IMAGENET1K_V1").to(self.device)
+        self.net = ResNet18().to(self.device)
         if self.iabn:
             convert_iabn(self.net, self.alpha)
         num_feats = self.net.fc.in_features
@@ -58,24 +61,28 @@ class NOTE:
                 module.weight.requires_grad_(True)
                 module.bias.requires_grad_(True)
 
+            if isinstance(module, IABN1d) or isinstance(module, IABN2d):
+                for param in module.parameters():
+                    param.requires_grad = True
+
         # Init train config
-        if self.train_config["method"] == "src":
-            self.optimizer = torch.optim.SGD(
-                self.net.parameters(),
-                lr=self.train_config["lr"],
-                momentum=self.train_config["momentum"],
-                weight_decay=self.train_config["weight_decay"],
-                nesterov=True,
-            )
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
-                                                                        T_max=self.train_config["epochs"] * len(self.source_dataloader))
-        elif self.train_config["method"] == "NOTE":
-            self.optimizer = torch.optim.Adam(
-                self.net.parameters(),
-                lr=self.train_config["lr"],
-                weight_decay=self.train_config["weight_decay"],
-            )
-            self.scheduler = None
+        self.optimizer = torch.optim.SGD(
+            self.net.parameters(),
+            lr=self.train_config["lr"],
+            momentum=self.train_config["momentum"],
+            weight_decay=self.train_config["weight_decay"],
+            nesterov=True,
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
+                                                                    T_max=self.train_config["epochs"] * len(self.source_dataloader))
+
+        # Init online train config
+        self.online_optimizer = torch.optim.Adam(
+            self.net.parameters(),
+            lr=self.online_config["lr"],
+            weight_decay=self.online_config["weight_decay"],
+        )
+
         self.class_criterion = torch.nn.CrossEntropyLoss()
 
         # Manage memory
@@ -118,12 +125,12 @@ class NOTE:
 
     def evaluation(self):
         self.net.eval()
+
         class_loss_sum = 0
         class_acc_sum = 0
         total_n = 0
-        data_loader = torch.utils.data.DataLoader(self.target_dataset, batch_size=self.train_config["batch_size"])
 
-        for data in data_loader:
+        for data in self.val_dataloader:
             feats, cls, _ = data
             feats = feats.to(self.device)
             cls = cls.to(self.device)
@@ -168,7 +175,7 @@ class NOTE:
                 pseudo_cls = logit.max(1, keepdim=False)[1][0]
                 self.mem.add_instance((f, pseudo_cls, d))
 
-        if not self.online_config["use_learned_stats"]:
+        if self.online_config["use_learned_stats"]:
             self.evaluation_online(sample_num, [[current_sample[0]], [current_sample[1]], [current_sample[2]]])
 
         if ((sample_num + 1) % self.online_config["update_interval"] != 0
@@ -176,7 +183,7 @@ class NOTE:
                 and self.online_config["update_interval"] >= sample_num):
                 return SKIPPED
 
-        if self.online_config["use_learned_stats"]:
+        if not self.online_config["use_learned_stats"]:
             self.evaluation_online(sample_num, self.fifo.get_memory())
 
         if not adapt:
@@ -192,7 +199,7 @@ class NOTE:
         dataset = torch.utils.data.TensorDataset(feats)
         data_loader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=self.train_config["batch_size"],
+            batch_size=self.online_config["batch_size"],
             shuffle=True,
             drop_last=False,
             pin_memory=False,
@@ -207,9 +214,9 @@ class NOTE:
                 if self.online_config["optimize"]:
                     loss = entropy_loss(preds)
 
-                    self.optimizer.zero_grad()
+                    self.online_optimizer.zero_grad()
                     loss.backward()
-                    self.optimizer.step()
+                    self.online_optimizer.step()
 
         return TRAINED
 
@@ -282,7 +289,6 @@ class NOTE:
 
     def save_checkpoint(self, epoch):
         ckpt = {'model': self.net.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
                 'epoch': epoch,}
         torch.save(ckpt, self.save_path + "pretrained_checkpoint.pth")
 
@@ -290,7 +296,6 @@ class NOTE:
         if os.path.isfile(self.save_path + "pretrained_checkpoint.pth"):
             ckpt = torch.load(self.save_path + "pretrained_checkpoint.pth")
             self.net.load_state_dict(ckpt['model'])
-            self.optimizer.load_state_dict(ckpt['optimizer'])
             return ckpt['epoch']
         return 0
 

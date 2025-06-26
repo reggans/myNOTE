@@ -14,6 +14,8 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
         super(CIFAR10Dataset, self).__init__()
         if distribution not in ['real', 'random', 'dirichlet']:
             raise NotImplementedError
+        if shuffle_criterion not in ['class', 'domain']:
+            raise ValueError('Unknown criterion {}'.format(shuffle_criterion))
 
         self.file_path = file_path
         self.domains = domains
@@ -40,7 +42,9 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
         self.class_labels = torch.cat(self.class_labels)
         self.domain_labels = torch.cat(self.domain_labels)
 
-        self.shuffle_distribution()
+        # Don't shuffle if source training
+        if transform != 'src':
+            self.shuffle_distribution()
 
         self.dataset = torch.utils.data.TensorDataset(
             self.features,
@@ -142,3 +146,20 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
             self.features = torch.stack(features)
             self.domain_labels = torch.LongTensor(do)
             self.class_labels = torch.LongTensor(cl)
+
+if __name__ == '__main__':
+    corruptions = ["shot_noise-5", "motion_blur-5", "snow-5", "pixelate-5", "gaussian_noise-5", "defocus_blur-5",
+                   "brightness-5", "fog-5", "zoom_blur-5", "frost-5", "glass_blur-5", "impulse_noise-5", "contrast-5",
+                   "jpeg_compression-5", "elastic_transform-5"]
+
+    data = CIFAR10Dataset(
+        file_path='./dataset/CIFAR-10-C',
+        domains=corruptions,
+        transform='tgt',
+        distribution="dirichlet",
+        dir_beta=0.1,
+        shuffle_criterion="domain",
+    )
+    #
+    # for img, cl, dl in data:
+    #     print(dl.item(), end=' ')
