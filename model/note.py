@@ -19,29 +19,31 @@ print(f"Using device: {DEVICE}")
 
 class NOTE:
     def __init__(self, source_dataset, val_dataset, target_dataset,
-                 train_config, online_config,
                  save_path, checkpoint_path,
-                 iabn=True, alpha=4,
-                 memory_type="PBRS", capacity=64,):
+                 lr=0.1, weight_decay=0.0005, momentum=0.9, batch_size=128, epochs=200,
+                 iabn=True, alpha=4, memory_type="PBRS", capacity=64,):
         assert (source_dataset.num_classes == target_dataset.num_classes)
 
         # Data-related
         self.device = DEVICE
-        self.source_dataloader = torch.utils.data.DataLoader(source_dataset, batch_size=train_config["batch_size"],)
-        self.val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=train_config["batch_size"],)
+        self.source_dataloader = torch.utils.data.DataLoader(source_dataset, batch_size=batch_size,)
+        self.val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size,)
         self.target_dataset = target_dataset        # Kept as dataset for ease later
         self.num_classes = source_dataset.num_classes
 
-        # Train-related
-        self.train_config = train_config
-        self.online_config = online_config
         self.save_path = save_path
         self.checkpoint_path = checkpoint_path
 
         # IABN-related
         self.iabn = iabn
         self.alpha = alpha
-        self.bn_momentum = train_config["bn_momentum"]
+
+        # Train-related
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+        self.batch_size = batch_size
+        self.epochs = epochs
 
         # Init net
         self.net = ResNet18().to(self.device)
@@ -50,43 +52,20 @@ class NOTE:
         num_feats = self.net.fc.in_features
         self.net.fc = nn.Linear(num_feats, self.num_classes).to(self.device)
 
-        # Manage net params
-        for param in self.net.parameters():
-            param.requires_grad = False
-        for module in self.net.modules():
-            if isinstance(module, nn.BatchNorm2d) or isinstance(module, nn.BatchNorm1d):
-                module.track_running_stats = True
-                module.momentum = self.bn_momentum
-
-                module.weight.requires_grad_(True)
-                module.bias.requires_grad_(True)
-
-            if isinstance(module, IABN1d) or isinstance(module, IABN2d):
-                for param in module.parameters():
-                    param.requires_grad = True
-
         # Init train config
         self.optimizer = torch.optim.SGD(
             self.net.parameters(),
-            lr=self.train_config["lr"],
-            momentum=self.train_config["momentum"],
-            weight_decay=self.train_config["weight_decay"],
+            lr=lr,
+            momentum=momentum,
+            weight_decay=weight_decay,
             nesterov=True,
         )
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
-                                                                    T_max=self.train_config["epochs"] * len(self.source_dataloader))
-
-        # Init online train config
-        self.online_optimizer = torch.optim.Adam(
-            self.net.parameters(),
-            lr=self.online_config["lr"],
-            weight_decay=self.online_config["weight_decay"],
-        )
+                                                                    T_max=epochs * len(self.source_dataloader))
 
         self.class_criterion = torch.nn.CrossEntropyLoss()
 
         # Manage memory
-        self.fifo = memory.FIFO(capacity=capacity)
         if memory_type == "PBRS":
             self.mem = memory.PBRS(capacity=capacity, num_class=self.num_classes)
         elif memory_type == "FIFO":
@@ -122,6 +101,48 @@ class NOTE:
 
         avg_loss = class_loss_sum / total_n
         return avg_loss
+
+    def setup_online(self, epochs=1, lr=0.0001, weight_decay=0, batch_size=64,
+                     use_learned_stats=True, bn_momentum=0.01, update_interval=64,
+                     temp_factor=1.0, optimize=True):
+        self.epochs = epochs
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.batch_size = batch_size
+        self.use_learned_stats = use_learned_stats
+        self.bn_momentum = bn_momentum
+        self.update_interval = update_interval
+        self.temp_factor = temp_factor
+        self.optimize = optimize
+
+        # Turn grad off for non-BN layers
+        for param in self.net.parameters():
+            param.requires_grad = False
+        for module in self.net.modules():
+            if isinstance(module, nn.BatchNorm2d) or isinstance(module, nn.BatchNorm1d):
+                if use_learned_stats:
+                    module.track_running_stats = True
+                    module.momentum = bn_momentum
+                else:
+                    module.track_running_stats = False
+                    module.running_mean = None
+                    module.running_var = None
+
+                module.weight.requires_grad_(True)
+                module.bias.requires_grad_(True)
+
+            if isinstance(module, IABN1d) or isinstance(module, IABN2d):
+                for param in module.parameters():
+                    param.requires_grad = True
+
+        # Init online train config
+        self.optimizer = torch.optim.Adam(
+            self.net.parameters(),
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+
+        self.fifo = memory.FIFO(capacity=self.mem.capacity)
 
     def evaluation(self):
         self.net.eval()
@@ -175,15 +196,15 @@ class NOTE:
                 pseudo_cls = logit.max(1, keepdim=False)[1][0]
                 self.mem.add_instance((f, pseudo_cls, d))
 
-        if self.online_config["use_learned_stats"]:
+        if self.use_learned_stats:
             self.evaluation_online(sample_num, [[current_sample[0]], [current_sample[1]], [current_sample[2]]])
 
-        if ((sample_num + 1) % self.online_config["update_interval"] != 0
+        if ((sample_num + 1) % self.update_interval != 0
                 and not (sample_num == len(self.target_dataset))
-                and self.online_config["update_interval"] >= sample_num):
+                and self.update_interval >= sample_num):
                 return SKIPPED
 
-        if not self.online_config["use_learned_stats"]:
+        if not self.use_learned_stats:
             self.evaluation_online(sample_num, self.fifo.get_memory())
 
         if not adapt:
@@ -199,24 +220,24 @@ class NOTE:
         dataset = torch.utils.data.TensorDataset(feats)
         data_loader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=self.online_config["batch_size"],
+            batch_size=self.batch_size,
             shuffle=True,
             drop_last=False,
             pin_memory=False,
         )
-        entropy_loss = HLoss(temp_factor=self.online_config["temp_factor"])
+        entropy_loss = HLoss(temp_factor=self.temp_factor)
 
-        for epoch in range(self.online_config["epochs"]):
+        for epoch in range(self.epochs):
             for feats in data_loader:
                 feats = feats[0].to(self.device)
                 preds = self.net(feats)
 
-                if self.online_config["optimize"]:
+                if self.optimize:
                     loss = entropy_loss(preds)
 
-                    self.online_optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     loss.backward()
-                    self.online_optimizer.step()
+                    self.optimizer.step()
 
         return TRAINED
 
@@ -273,13 +294,13 @@ class NOTE:
     def dump_eval_online_result(self, is_train_offline=False):
         if is_train_offline:
             data_loader = torch.utils.data.DataLoader(self.target_dataset,
-                                                      batch_size=self.train_config["batch_size"],
+                                                      batch_size=self.batch_size,
                                                       shuffle=False)
 
             for i, data in enumerate(data_loader):
                 feats, cls, do = data
                 input_data = [list(feats), list(cls), list(do)]
-                self.evaluation_online(i * self.train_config["batch_size"], input_data)
+                self.evaluation_online(i * self.batch_size, input_data)
 
         # logging json files
         json_file = open(self.save_path + 'online_eval.json', 'w')
@@ -290,11 +311,11 @@ class NOTE:
     def save_checkpoint(self, epoch):
         ckpt = {'model': self.net.state_dict(),
                 'epoch': epoch,}
-        torch.save(ckpt, self.save_path + "pretrained_checkpoint.pth")
+        torch.save(ckpt, self.checkpoint_path + "pretrained_checkpoint.pth")
 
     def load_checkpoint(self):
-        if os.path.isfile(self.save_path + "pretrained_checkpoint.pth"):
-            ckpt = torch.load(self.save_path + "pretrained_checkpoint.pth")
+        if os.path.isfile(self.checkpoint_path + "pretrained_checkpoint.pth"):
+            ckpt = torch.load(self.checkpoint_path + "pretrained_checkpoint.pth")
             self.net.load_state_dict(ckpt['model'])
             return ckpt['epoch']
         return 0
